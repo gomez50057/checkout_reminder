@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:geolocator/geolocator.dart';
@@ -10,22 +12,21 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  tz.initializeTimeZones(); // ✅ Inicializar timezone correctamente
+  await initializeService();
+  tz.initializeTimeZones();
 
   final AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
-
-  final InitializationSettings initializationSettings =
-      InitializationSettings(android: initializationSettingsAndroid);
+  final InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+  );
 
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
-
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -39,24 +40,64 @@ class MyApp extends StatelessWidget {
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
-
   @override
   HomePageState createState() => HomePageState();
 }
 
 class HomePageState extends State<HomePage> {
+  // Controladores para las coordenadas y el umbral de distancia
   TextEditingController latController = TextEditingController();
   TextEditingController lonController = TextEditingController();
+  TextEditingController distanceController = TextEditingController();
+  // Hora de la alarma
   TimeOfDay selectedTime = const TimeOfDay(hour: 16, minute: 33);
 
   @override
   void initState() {
     super.initState();
     loadPreferences();
-    startLocationTracking(); // 🔥 Ahora la ubicación se actualiza en tiempo real
+    startLocationTracking();
   }
 
-  // 🔔 Programar Notificación como Alarma a la Hora Personalizada
+  // Cargar configuración guardada (coordenadas, hora y distancia umbral)
+  Future<void> loadPreferences() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    double lat = prefs.getDouble('latitude') ?? 19.4326;
+    double lon = prefs.getDouble('longitude') ?? -99.1332;
+    int hour = prefs.getInt('hour') ?? 16;
+    int minute = prefs.getInt('minute') ?? 33;
+    double threshold = prefs.getDouble('threshold') ?? 1.0;
+
+    setState(() {
+      latController.text = lat.toString();
+      lonController.text = lon.toString();
+      distanceController.text = threshold.toString();
+      selectedTime = TimeOfDay(hour: hour, minute: minute);
+    });
+  }
+
+  // Guardar configuración (coordenadas, hora y distancia umbral) y programar alarma
+  Future<void> savePreferences() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    double lat = double.tryParse(latController.text) ?? 19.4326;
+    double lon = double.tryParse(lonController.text) ?? -99.1332;
+    double threshold = double.tryParse(distanceController.text) ?? 1.0;
+
+    await prefs.setDouble('latitude', lat);
+    await prefs.setDouble('longitude', lon);
+    await prefs.setInt('hour', selectedTime.hour);
+    await prefs.setInt('minute', selectedTime.minute);
+    await prefs.setDouble('threshold', threshold);
+
+    scheduleAlarm();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text("Configuración guardada")));
+  }
+
+  // Programar notificación tipo alarma según la hora configurada
   Future<void> scheduleAlarm() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     int hour = prefs.getInt('hour') ?? 16;
@@ -64,21 +105,28 @@ class HomePageState extends State<HomePage> {
 
     final now = tz.TZDateTime.now(tz.local);
     final scheduledTime = tz.TZDateTime(
-        tz.local, now.year, now.month, now.day, hour, minute);
+      tz.local,
+      now.year,
+      now.month,
+      now.day,
+      hour,
+      minute,
+    );
 
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      'alarm_channel_id',
-      'Alarma de salida',
-      channelDescription: 'Alarma para recordar marcar salida',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-      enableVibration: true,
-    );
+          'alarm_channel_id',
+          'Alarma de salida',
+          channelDescription: 'Alarma para recordar marcar salida',
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+        );
 
-    const NotificationDetails platformChannelSpecifics =
-        NotificationDetails(android: androidPlatformChannelSpecifics);
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+    );
 
     await flutterLocalNotificationsPlugin.zonedSchedule(
       0,
@@ -91,43 +139,36 @@ class HomePageState extends State<HomePage> {
       matchDateTimeComponents: DateTimeComponents.time,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
     );
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Alarma programada")),
-    );
   }
 
-  // 📍 Monitorear Ubicación en Tiempo Real
+  // Iniciar el monitoreo de la ubicación en tiempo real (cada 1 metro)
   void startLocationTracking() {
     Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 1, // 🔥 Detectar cambios cada 1 metro
+        distanceFilter: 1,
       ),
     ).listen((Position position) {
       checkUserLocation(position.latitude, position.longitude);
     });
   }
 
-  // 📍 Verificar si el usuario ha salido del área de trabajo
+  // Verificar si el usuario se ha alejado más allá del umbral configurado
   Future<void> checkUserLocation(double lat, double lon) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     double workLat = prefs.getDouble('latitude') ?? 19.4326;
     double workLon = prefs.getDouble('longitude') ?? -99.1332;
+    double threshold = prefs.getDouble('threshold') ?? 1.0;
 
-    // 🔍 Medir la distancia entre la ubicación actual y el área de trabajo
     double distance = Geolocator.distanceBetween(lat, lon, workLat, workLon);
+    debugPrint("Distancia actual: $distance metros");
 
-    print("Distancia actual: $distance metros");
-
-    // ⚠️ Si la distancia es mayor a 1 metro, mostrar la alerta
-    if (distance > 1) {
+    if (distance > threshold) {
       showExitAlert();
     }
   }
 
-  // 📢 Mostrar Notificación si el usuario se aleja
+  // Mostrar notificación de alerta
   void showExitAlert() {
     flutterLocalNotificationsPlugin.show(
       1,
@@ -146,58 +187,17 @@ class HomePageState extends State<HomePage> {
     );
   }
 
-  // 📍 Guardar ubicación actual como "Ubicación de Trabajo"
-  Future<void> saveCurrentLocation() async {
-    Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
-
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('latitude', position.latitude);
-    await prefs.setDouble('longitude', position.longitude);
-
-    setState(() {
-      latController.text = position.latitude.toString();
-      lonController.text = position.longitude.toString();
-    });
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Ubicación de trabajo guardada")),
+  // Selector de hora para configurar la hora de la alarma
+  Future<void> selectTime(BuildContext context) async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: selectedTime,
     );
-  }
-
-  // 📥 Guardar preferencias de hora y coordenadas
-  Future<void> savePreferences() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    double lat = double.tryParse(latController.text) ?? 19.4326;
-    double lon = double.tryParse(lonController.text) ?? -99.1332;
-
-    await prefs.setDouble('latitude', lat);
-    await prefs.setDouble('longitude', lon);
-    await prefs.setInt('hour', selectedTime.hour);
-    await prefs.setInt('minute', selectedTime.minute);
-
-    scheduleAlarm();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Configuración guardada")),
-    );
-  }
-
-  // 📤 Cargar configuración guardada
-  Future<void> loadPreferences() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    double lat = prefs.getDouble('latitude') ?? 19.4326;
-    double lon = prefs.getDouble('longitude') ?? -99.1332;
-    int hour = prefs.getInt('hour') ?? 16;
-    int minute = prefs.getInt('minute') ?? 33;
-
-    setState(() {
-      latController.text = lat.toString();
-      lonController.text = lon.toString();
-      selectedTime = TimeOfDay(hour: hour, minute: minute);
-    });
+    if (picked != null) {
+      setState(() {
+        selectedTime = picked;
+      });
+    }
   }
 
   @override
@@ -206,17 +206,104 @@ class HomePageState extends State<HomePage> {
       appBar: AppBar(title: const Text('Check Out Reminder')),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("Configuración de Alarma", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            TextField(controller: latController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "Latitud de trabajo")),
-            TextField(controller: lonController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "Longitud de trabajo")),
-            ElevatedButton(onPressed: saveCurrentLocation, child: const Text("📍 Marcar Ubicación Actual")),
-            ElevatedButton(onPressed: savePreferences, child: const Text("Guardar Configuración")),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Configuración de Alarma",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              TextField(
+                controller: latController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: "Latitud de trabajo",
+                ),
+              ),
+              TextField(
+                controller: lonController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: "Longitud de trabajo",
+                ),
+              ),
+              TextField(
+                controller: distanceController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: "Distancia umbral (metros)",
+                ),
+              ),
+              Row(
+                children: [
+                  Text("Hora de alarma: ${selectedTime.format(context)}"),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    onPressed: () => selectTime(context),
+                    child: const Text("Cambiar Hora"),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: savePreferences,
+                child: const Text("Guardar Configuración"),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+// Inicializar el servicio de fondo usando flutter_background_service_android
+Future<void> initializeService() async {
+  final service = FlutterBackgroundService();
+
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onStart,
+      isForegroundMode: true,
+      autoStart: true,
+    ),
+    iosConfiguration: IosConfiguration(autoStart: true, onForeground: onStart),
+  );
+
+  service.startService();
+}
+
+@pragma('vm:entry-point')
+void onStart(ServiceInstance service) {
+  // Cada 15 segundos en segundo plano, verificar ubicación
+  Timer.periodic(const Duration(seconds: 15), (timer) async {
+    Position position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+    );
+
+    double lat = position.latitude;
+    double lon = position.longitude;
+
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    double workLat = prefs.getDouble('latitude') ?? 19.4326;
+    double workLon = prefs.getDouble('longitude') ?? -99.1332;
+    double threshold = prefs.getDouble('threshold') ?? 1.0;
+
+    double distance = Geolocator.distanceBetween(lat, lon, workLat, workLon);
+
+    if (distance > threshold) {
+      flutterLocalNotificationsPlugin.show(
+        2,
+        "⚠️ Saliste sin marcar salida",
+        "🚨 No olvides checar antes de salir.",
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'channel_id3',
+            'Alerta de salida',
+          ),
+        ),
+      );
+    }
+  });
 }
