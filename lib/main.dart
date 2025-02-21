@@ -17,9 +17,8 @@ void main() async {
 
   final AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
-  final InitializationSettings initializationSettings = InitializationSettings(
-    android: initializationSettingsAndroid,
-  );
+  final InitializationSettings initializationSettings =
+      InitializationSettings(android: initializationSettingsAndroid);
 
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
   runApp(const MyApp());
@@ -59,7 +58,7 @@ class HomePageState extends State<HomePage> {
     startLocationTracking();
   }
 
-  // Cargar configuración guardada (coordenadas, hora y distancia umbral)
+  // Cargar configuración guardada: coordenadas, hora y umbral
   Future<void> loadPreferences() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     double lat = prefs.getDouble('latitude') ?? 19.4326;
@@ -76,7 +75,7 @@ class HomePageState extends State<HomePage> {
     });
   }
 
-  // Guardar configuración (coordenadas, hora y distancia umbral) y programar alarma
+  // Guardar configuración (coordenadas, hora, umbral) y programar la alarma
   Future<void> savePreferences() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     double lat = double.tryParse(latController.text) ?? 19.4326;
@@ -92,12 +91,36 @@ class HomePageState extends State<HomePage> {
     scheduleAlarm();
 
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text("Configuración guardada")));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Configuración guardada")),
+    );
   }
 
-  // Programar notificación tipo alarma según la hora configurada
+  // Función para capturar la ubicación actual y actualizar los campos
+  Future<void> captureCurrentLocation() async {
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('latitude', position.latitude);
+      await prefs.setDouble('longitude', position.longitude);
+      setState(() {
+        latController.text = position.latitude.toString();
+        lonController.text = position.longitude.toString();
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Ubicación actual capturada")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error al capturar la ubicación: $e")),
+      );
+    }
+  }
+
+  // Programar la notificación (alarma) según la hora configurada
   Future<void> scheduleAlarm() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     int hour = prefs.getInt('hour') ?? 16;
@@ -115,18 +138,16 @@ class HomePageState extends State<HomePage> {
 
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-          'alarm_channel_id',
-          'Alarma de salida',
-          channelDescription: 'Alarma para recordar marcar salida',
-          importance: Importance.max,
-          priority: Priority.high,
-          playSound: true,
-          enableVibration: true,
-        );
-
-    const NotificationDetails platformChannelSpecifics = NotificationDetails(
-      android: androidPlatformChannelSpecifics,
+      'alarm_channel_id',
+      'Alarma de salida',
+      channelDescription: 'Alarma para recordar marcar salida',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
     );
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
 
     await flutterLocalNotificationsPlugin.zonedSchedule(
       0,
@@ -134,14 +155,13 @@ class HomePageState extends State<HomePage> {
       '¡Marca tu salida ahora!',
       scheduledTime,
       platformChannelSpecifics,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
+      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.time,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
     );
   }
 
-  // Iniciar el monitoreo de la ubicación en tiempo real (cada 1 metro)
+  // Iniciar el monitoreo de ubicación en tiempo real (cada 1 metro)
   void startLocationTracking() {
     Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -153,7 +173,7 @@ class HomePageState extends State<HomePage> {
     });
   }
 
-  // Verificar si el usuario se ha alejado más allá del umbral configurado
+  // Verificar si el usuario se alejó del área de trabajo según el umbral configurado
   Future<void> checkUserLocation(double lat, double lon) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     double workLat = prefs.getDouble('latitude') ?? 19.4326;
@@ -168,7 +188,7 @@ class HomePageState extends State<HomePage> {
     }
   }
 
-  // Mostrar notificación de alerta
+  // Mostrar notificación de alerta si se excede el umbral
   void showExitAlert() {
     flutterLocalNotificationsPlugin.show(
       1,
@@ -189,10 +209,8 @@ class HomePageState extends State<HomePage> {
 
   // Selector de hora para configurar la hora de la alarma
   Future<void> selectTime(BuildContext context) async {
-    final TimeOfDay? picked = await showTimePicker(
-      context: context,
-      initialTime: selectedTime,
-    );
+    final TimeOfDay? picked =
+        await showTimePicker(context: context, initialTime: selectedTime);
     if (picked != null) {
       setState(() {
         selectedTime = picked;
@@ -210,31 +228,32 @@ class HomePageState extends State<HomePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                "Configuración de Alarma",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
+              const Text("Configuración de Alarma",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               TextField(
                 controller: latController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: "Latitud de trabajo",
-                ),
+                decoration:
+                    const InputDecoration(labelText: "Latitud de trabajo"),
               ),
               TextField(
                 controller: lonController,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: "Longitud de trabajo",
-                ),
+                decoration:
+                    const InputDecoration(labelText: "Longitud de trabajo"),
               ),
               TextField(
                 controller: distanceController,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
-                  labelText: "Distancia umbral (metros)",
-                ),
+                    labelText: "Distancia umbral (metros)"),
               ),
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: captureCurrentLocation,
+                child: const Text("📍 Tomar Ubicación Actual"),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Text("Hora de alarma: ${selectedTime.format(context)}"),
@@ -258,7 +277,7 @@ class HomePageState extends State<HomePage> {
   }
 }
 
-// Inicializar el servicio de fondo usando flutter_background_service_android
+// Inicializar el servicio en segundo plano usando flutter_background_service y flutter_background_service_android
 Future<void> initializeService() async {
   final service = FlutterBackgroundService();
 
@@ -268,7 +287,10 @@ Future<void> initializeService() async {
       isForegroundMode: true,
       autoStart: true,
     ),
-    iosConfiguration: IosConfiguration(autoStart: true, onForeground: onStart),
+    iosConfiguration: IosConfiguration(
+      autoStart: true,
+      onForeground: onStart,
+    ),
   );
 
   service.startService();
@@ -276,7 +298,7 @@ Future<void> initializeService() async {
 
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) {
-  // Cada 15 segundos en segundo plano, verificar ubicación
+  // Cada 15 segundos en segundo plano, verificar la ubicación
   Timer.periodic(const Duration(seconds: 15), (timer) async {
     Position position = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
@@ -298,10 +320,7 @@ void onStart(ServiceInstance service) {
         "⚠️ Saliste sin marcar salida",
         "🚨 No olvides checar antes de salir.",
         const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'channel_id3',
-            'Alerta de salida',
-          ),
+          android: AndroidNotificationDetails('channel_id3', 'Alerta de salida'),
         ),
       );
     }
